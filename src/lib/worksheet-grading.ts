@@ -29,10 +29,8 @@ export function parseExtractedProblems(raw: string): ExtractedProblem[] {
     return [];
   }
 
-  const jsonText = jsonMatch[0];
-
   try {
-    const parsed = JSON.parse(jsonText) as ExtractedProblem[];
+    const parsed = JSON.parse(jsonMatch[0]) as ExtractedProblem[];
 
     if (!Array.isArray(parsed)) {
       return [];
@@ -55,8 +53,29 @@ export function parseExtractedProblems(raw: string): ExtractedProblem[] {
   }
 }
 
-function normalizeExpression(expression: string): string {
-  return expression
+function latexToPlainMath(input: string): string {
+  let text = input;
+
+  for (let index = 0; index < 8; index += 1) {
+    const next = text.replace(
+      /\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g,
+      "$1/$2"
+    );
+
+    if (next === text) {
+      break;
+    }
+
+    text = next;
+  }
+
+  return text
+    .replace(/\\div/g, "/")
+    .replace(/\\times/g, "*")
+    .replace(/\\cdot/g, "*")
+    .replace(/\\left\s*\(/g, "(")
+    .replace(/\\right\s*\)/g, ")")
+    .replace(/[{}]/g, "")
     .replace(/[÷∕]/g, "/")
     .replace(/[×xX]/g, "*")
     .replace(/−/g, "-")
@@ -64,19 +83,50 @@ function normalizeExpression(expression: string): string {
     .trim();
 }
 
+function normalizeExpression(expression: string): string {
+  return latexToPlainMath(expression);
+}
+
 function formatFraction(value: unknown): string | null {
   try {
     const valueFraction = fraction(value as string | number);
-    const text = valueFraction.toString();
+    const typed = valueFraction as unknown as {
+      s: bigint;
+      n: bigint;
+      d: bigint;
+    };
+    const sign = Number(typed.s) < 0 ? "-" : "";
+    const numerator = Math.abs(Number(typed.n));
+    const denominator = Number(typed.d);
 
-    if (!text || text === "NaN") {
-      return null;
+    if (denominator === 1) {
+      return `${sign}${numerator}`;
     }
 
-    return text.replace(/^(-?\d+)\/1$/, "$1");
+    return `${sign}${numerator}/${denominator}`;
   } catch {
     return null;
   }
+}
+
+function parseRepeatingDecimal(answer: string): string | null {
+  const match = answer.match(/^(-?\d+(?:\.\d+)?)\((\d+)\)$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const [, wholePart, repeatDigits] = match;
+  const decimalPrefix = wholePart.includes(".")
+    ? wholePart
+    : `${wholePart}.${repeatDigits}`;
+  const approximate = Number(`${decimalPrefix}${repeatDigits.slice(0, 2)}`);
+
+  if (Number.isNaN(approximate)) {
+    return null;
+  }
+
+  return formatFraction(fraction(approximate));
 }
 
 function parseAnswerFraction(answer: string): string | null {
@@ -86,15 +136,31 @@ function parseAnswerFraction(answer: string): string | null {
     return null;
   }
 
-  if (/^-?\d+$/.test(normalized)) {
-    return formatFraction(fraction(Number(normalized), 1));
-  }
-
   if (/^-?\d+\s*\/\s*\d+$/.test(normalized)) {
     return formatFraction(fraction(normalized.replace(/\s+/g, "")));
   }
 
+  if (/^-?\d+$/.test(normalized)) {
+    return formatFraction(fraction(Number(normalized), 1));
+  }
+
+  if (/^-?\d*\.\d+\(\d+\)$/.test(normalized)) {
+    return parseRepeatingDecimal(normalized);
+  }
+
+  if (/^-?\d*\.\d+$/.test(normalized)) {
+    return formatFraction(fraction(parseFloat(normalized)));
+  }
+
   return null;
+}
+
+function fractionsEqual(left: string, right: string): boolean {
+  try {
+    return Boolean(math.equal(fraction(left), fraction(right)));
+  } catch {
+    return left === right;
+  }
 }
 
 export function evaluateExpression(expression: string): string | null {
@@ -119,37 +185,38 @@ function inferStudentAnswer(problem: ExtractedProblem): {
 } {
   const writtenRaw =
     problem.written_final_answer || problem.student_final_answer || "";
-  const writtenAnswer = parseAnswerFraction(writtenRaw) || writtenRaw.trim();
-  const workExpression = problem.last_operation_before_answer || "";
-  const workAnswer = workExpression
-    ? evaluateExpression(workExpression)
-    : null;
+  const writtenParsed = parseAnswerFraction(writtenRaw);
+  const writtenAnswer = writtenParsed || writtenRaw.trim();
+  const workExpression = normalizeExpression(
+    problem.last_operation_before_answer || ""
+  );
+  const workAnswer = workExpression ? evaluateExpression(workExpression) : null;
 
   if (workAnswer) {
     if (
-      writtenAnswer &&
-      writtenAnswer !== "unclear" &&
-      writtenAnswer !== workAnswer
+      writtenParsed &&
+      writtenParsed !== workAnswer &&
+      !fractionsEqual(writtenParsed, workAnswer)
     ) {
       return {
         answer: workAnswer,
-        writtenAnswer,
+        writtenAnswer: writtenParsed,
         source: "work",
-        note: `Work steps imply ${workAnswer}; final written answer read as ${writtenAnswer}.`,
+        note: `Work steps imply ${workAnswer}; final written answer read as ${writtenParsed}.`,
       };
     }
 
     return {
       answer: workAnswer,
-      writtenAnswer: writtenAnswer || workAnswer,
+      writtenAnswer: writtenParsed || workAnswer,
       source: "work",
     };
   }
 
-  if (writtenAnswer && writtenAnswer !== "unclear") {
+  if (writtenParsed) {
     return {
-      answer: writtenAnswer,
-      writtenAnswer,
+      answer: writtenParsed,
+      writtenAnswer: writtenParsed,
       source: "written",
     };
   }
@@ -166,15 +233,17 @@ export function gradeProblems(problems: ExtractedProblem[]): GradedProblem[] {
     const expression = normalizeExpression(problem.printed_expression);
     const inferred = inferStudentAnswer(problem);
     const correctAnswer = expression ? evaluateExpression(expression) : null;
+    const displayExpression =
+      expression || latexToPlainMath(problem.printed_expression) || "Unclear";
 
-    if (!expression || !correctAnswer) {
+    if (!correctAnswer) {
       return {
         number: problem.number,
-        expression: problem.printed_expression || "Unclear",
+        expression: displayExpression,
         studentAnswer: inferred.answer || "Unclear",
         writtenAnswer: inferred.writtenAnswer || "Unclear",
         answerSource: inferred.source,
-        correctAnswer: correctAnswer || "Unclear",
+        correctAnswer: "Unclear",
         status: "Unclear",
         note: inferred.note,
       };
@@ -183,7 +252,7 @@ export function gradeProblems(problems: ExtractedProblem[]): GradedProblem[] {
     if (!inferred.answer) {
       return {
         number: problem.number,
-        expression: problem.printed_expression,
+        expression: displayExpression,
         studentAnswer: "Unanswered",
         writtenAnswer: inferred.writtenAnswer || "Unanswered",
         answerSource: inferred.source,
@@ -193,12 +262,13 @@ export function gradeProblems(problems: ExtractedProblem[]): GradedProblem[] {
       };
     }
 
-    const status =
-      inferred.answer === correctAnswer ? "Correct" : "Incorrect";
+    const status = fractionsEqual(inferred.answer, correctAnswer)
+      ? "Correct"
+      : "Incorrect";
 
     return {
       number: problem.number,
-      expression: problem.printed_expression,
+      expression: displayExpression,
       studentAnswer: inferred.answer,
       writtenAnswer: inferred.writtenAnswer || inferred.answer,
       answerSource: inferred.source,
@@ -263,10 +333,8 @@ export function parseWorkSteps(
     return [];
   }
 
-  const jsonText = jsonMatch[0];
-
   try {
-    const parsed = JSON.parse(jsonText) as Array<{
+    const parsed = JSON.parse(jsonMatch[0]) as Array<{
       number?: number;
       last_operation_before_answer?: string;
     }>;
@@ -288,6 +356,7 @@ export function parseWorkSteps(
     return [];
   }
 }
+
 export function mergeWorkSteps(
   problems: ExtractedProblem[],
   workSteps: Array<{ number: number; last_operation_before_answer: string }>
@@ -311,4 +380,20 @@ export function problemsMissingWorkSteps(
   problems: ExtractedProblem[]
 ): ExtractedProblem[] {
   return problems.filter((problem) => !problem.last_operation_before_answer);
+}
+
+export function problemsNeedingWorkStepPass(
+  problems: ExtractedProblem[]
+): ExtractedProblem[] {
+  const graded = gradeProblems(problems);
+
+  return problems.filter((problem, index) => {
+    const result = graded[index];
+
+    return (
+      !problem.last_operation_before_answer ||
+      result?.status === "Unclear" ||
+      result?.correctAnswer === "Unclear"
+    );
+  });
 }

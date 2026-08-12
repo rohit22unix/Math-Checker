@@ -8,10 +8,11 @@ Math-Checker is a mobile-friendly worksheet checker that uploads a worksheet ima
    ```powershell
    ollama serve
    ```
-2. Pull the instruct vision model (non-thinking, faster responses):
+2. Pull the fast instruct vision model:
    ```powershell
-   ollama pull qwen3-vl:4b-instruct
+   ollama pull qwen3-vl:2b-instruct
    ```
+   For better accuracy (slower), use `qwen3-vl:4b-instruct` instead.
 3. Install dependencies if needed:
    ```powershell
    npm install
@@ -37,7 +38,7 @@ The app reads the following environment variables:
 
 ```env
 OLLAMA_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=qwen3-vl:4b-instruct
+OLLAMA_MODEL=qwen3-vl:2b-instruct
 ```
 
-Create `.env.local` with those values if you need to override the defaults. The first worksheet check may take 1–3 minutes while Ollama loads the model.
+Create `.env.local` with those values if you need to override the defaults. Analysis usually takes 20–60 seconds on the 2b model; the first run may take longer while Ollama loads the model.

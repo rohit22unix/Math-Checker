@@ -6,6 +6,7 @@ import {
   mergeWorkSteps,
   parseExtractedProblems,
   parseWorkSteps,
+  problemsNeedingWorkStepPass,
 } from "@/lib/worksheet-grading";
 
 export const GRADING_VERSION_MARKER = "Graded by Math-Checker (server-side)";
@@ -13,32 +14,27 @@ export const GRADING_VERSION_MARKER = "Graded by Math-Checker (server-side)";
 export const runtime = "nodejs";
 
 const DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434";
-const DEFAULT_OLLAMA_MODEL = "qwen3-vl:4b-instruct";
-const ANALYSIS_TIMEOUT_MS = 180_000;
+const DEFAULT_OLLAMA_MODEL = "qwen3-vl:2b-instruct";
+const ANALYSIS_TIMEOUT_MS = 120_000;
 const OLLAMA_OPTIONS = {
   temperature: 0.0,
-  num_ctx: 8192,
-  num_predict: 640,
+  num_ctx: 4096,
+  num_predict: 320,
 };
 const CONTEXT_SIZE_ERROR_MESSAGE =
   "This worksheet image needs more AI processing space. Please try again. If the problem continues, use a clearer photo containing only the worksheet page.";
 const TIMEOUT_ERROR_MESSAGE =
   "The local AI timed out. Please try a tighter crop of the worksheet, a clearer photo, or a page with fewer questions.";
-const EXTRACTION_PROMPT = `Read this Kumon-style math worksheet image.
+const EXTRACTION_PROMPT = `Read this Kumon math worksheet image.
 
-For each numbered problem (1) through (4), extract:
-- printed_expression: the printed problem exactly as shown
-- last_operation_before_answer: the student's last operation line before the final answer (e.g. "3/8 x 2/1" or "1/2 - 3/8"). Ignore scratch cancellations.
-- written_final_answer: the fraction written after the last equals sign
+For each problem (1) through (4), return JSON with:
+- printed_expression: plain text like "3/8 / (7/9 * 9/14)" — never LaTeX
+- last_operation_before_answer: plain text like "3/8 * 2/1"
+- written_final_answer: plain fraction like "3/4"
 
-Rules:
-- Ignore name/date boxes, score tables, borders, and shadows.
-- Do not grade or compute answers.
-- For handwritten digits, look carefully at 4 vs 9, 1 vs 7, and 6 vs 0.
-- If the final digit is ambiguous, write "unclear".
-
-Return ONLY a valid JSON array with no markdown:
-[{"number":1,"printed_expression":"...","last_operation_before_answer":"...","written_final_answer":"..."}]`;
+Use plain fractions only (example: 3/4). No LaTeX, no decimals, no grading.
+Return ONLY JSON:
+[{"number":1,"printed_expression":"3/8 / (7/9 * 9/14)","last_operation_before_answer":"3/8 * 2/1","written_final_answer":"3/4"}]`;
 
 const WORK_STEP_PROMPT = `Look at this Kumon worksheet again.
 
@@ -141,25 +137,27 @@ async function extractWorksheetProblems(
     };
   }
 
-  try {
-    const workStepResponse = await callOllamaChat(
-      ollamaUrl,
-      ollamaModel,
-      base64Image,
-      WORK_STEP_PROMPT
-    );
+  if (extracted.length && problemsNeedingWorkStepPass(extracted).length > 0) {
+    try {
+      const workStepResponse = await callOllamaChat(
+        ollamaUrl,
+        ollamaModel,
+        base64Image,
+        WORK_STEP_PROMPT
+      );
 
-    if (workStepResponse.ok) {
-      const workStepPayload = await workStepResponse.json();
-      const workStepText = extractAnalysisText(workStepPayload);
-      const workSteps = workStepText ? parseWorkSteps(workStepText) : [];
+      if (workStepResponse.ok) {
+        const workStepPayload = await workStepResponse.json();
+        const workStepText = extractAnalysisText(workStepPayload);
+        const workSteps = workStepText ? parseWorkSteps(workStepText) : [];
 
-      if (workSteps.length && extracted.length) {
-        extracted = mergeWorkSteps(extracted, workSteps);
+        if (workSteps.length) {
+          extracted = mergeWorkSteps(extracted, workSteps);
+        }
       }
+    } catch {
+      // Keep first-pass extraction if the work-step request fails.
     }
-  } catch {
-    // Keep first-pass extraction if the work-step request fails.
   }
 
   return { extracted, needsAppUpdate: false };
@@ -300,7 +298,7 @@ export async function POST(request: Request) {
         selectedOllamaUrl,
         ollamaModel,
         base64Image,
-        `${EXTRACTION_PROMPT}\n\nImportant: respond with JSON only. Do not grade problems.`
+        `${EXTRACTION_PROMPT}\n\nRespond with JSON only. Use plain fractions like 3/4, never LaTeX.`
       );
 
       if (retryResponse.ok) {

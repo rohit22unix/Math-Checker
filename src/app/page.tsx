@@ -4,10 +4,10 @@ import type { ChangeEvent } from "react";
 import { useEffect, useState } from "react";
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-const MAX_IMAGE_EDGE = 1400;
+const MAX_IMAGE_EDGE = 900;
 const AGGRESSIVE_MAX_IMAGE_EDGE = 760;
 const OPTIMIZED_UPLOAD_BYTES = 1.5 * 1024 * 1024;
-const ANALYSIS_TIMEOUT_MS = 190_000;
+const ANALYSIS_TIMEOUT_MS = 130_000;
 const SECTION_ANALYSIS_TIMEOUT_MS = 120_000;
 const UNUSABLE_RESULT_MARKER =
   "the worksheet image was received, but the local model did not return a usable result";
@@ -32,7 +32,7 @@ function renameAsJpeg(fileName: string) {
 }
 
 async function optimizeWorksheetImage(file: File): Promise<File> {
-  return optimizeWorksheetImageWithSettings(file, MAX_IMAGE_EDGE, 0.82);
+  return optimizeWorksheetImageWithSettings(file, MAX_IMAGE_EDGE, 0.78);
 }
 
 async function optimizeWorksheetImageAggressive(file: File): Promise<File> {
