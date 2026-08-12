@@ -74,10 +74,47 @@ export async function callOllamaChat(params: {
   });
 }
 
+export async function getOllamaProcessorStatus(ollamaUrl: string): Promise<string> {
+  try {
+    const response = await fetch(`${ollamaUrl}/api/ps`, {
+      signal: AbortSignal.timeout(5_000),
+    });
+
+    if (!response.ok) {
+      return "unknown";
+    }
+
+    const payload = (await response.json()) as {
+      models?: Array<{ size?: number; size_vram?: number }>;
+    };
+
+    const model = payload.models?.[0];
+
+    if (!model?.size || model.size_vram === undefined) {
+      return "cpu";
+    }
+
+    const gpuPercent = Math.round((model.size_vram / model.size) * 100);
+
+    if (gpuPercent >= 80) {
+      return "gpu";
+    }
+
+    if (gpuPercent <= 5) {
+      return "cpu";
+    }
+
+    return `hybrid ${100 - gpuPercent}% CPU / ${gpuPercent}% GPU`;
+  } catch {
+    return "unknown";
+  }
+}
+
 export async function warmOllamaModel(): Promise<{
   ok: boolean;
   model: string;
   ollamaUrl: string;
+  processor: string;
   error?: string;
 }> {
   const { ollamaModel, candidateUrls, keepAlive } = getOllamaConfig();
@@ -93,7 +130,9 @@ export async function warmOllamaModel(): Promise<{
       });
 
       if (response.ok) {
-        return { ok: true, model: ollamaModel, ollamaUrl };
+        const processor = await getOllamaProcessorStatus(ollamaUrl);
+
+        return { ok: true, model: ollamaModel, ollamaUrl, processor };
       }
     } catch {
       // Try the next Ollama host.
@@ -104,6 +143,7 @@ export async function warmOllamaModel(): Promise<{
     ok: false,
     model: ollamaModel,
     ollamaUrl: candidateUrls[0] || DEFAULT_OLLAMA_URL,
+    processor: "offline",
     error: "Could not warm the local Ollama model.",
   };
 }

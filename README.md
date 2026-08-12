@@ -41,7 +41,7 @@ OLLAMA_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=qwen3-vl:2b-instruct
 ```
 
-Create `.env.local` with those values if you need to override the defaults.
+Create `.env.local` from `.env.example` if you need to override the defaults.
 
 Optional speed settings:
 
@@ -67,3 +67,63 @@ To get close to **10 seconds**:
 5. Crop photos close to the worksheet — less image data means faster inference.
 
 The first worksheet after reboot is slower while Ollama loads the model into memory.
+
+## GPU on another home PC (CPU-only laptop)
+
+If your laptop has **no NVIDIA GPU**, you can still get **8–20 second** analysis by running Ollama on a different PC on your home network that has a GPU. The Math-Checker app stays on your laptop; only the vision model runs remotely.
+
+### 1. Set up the GPU PC
+
+On the Windows PC with an NVIDIA GPU:
+
+1. Install [Ollama](https://ollama.com/download) if it is not already installed.
+2. Pull the vision model:
+   ```powershell
+   ollama pull qwen3-vl:2b-instruct
+   ```
+3. Allow Ollama to accept connections from your home network. In **System → Environment Variables**, add a user variable:
+   ```text
+   OLLAMA_HOST=0.0.0.0
+   ```
+   Restart Ollama (quit the tray app and run `ollama serve`, or reboot).
+4. Allow Windows Firewall inbound TCP on port **11434** (Private network profile).
+5. Find the GPU PC's local IP (for example `192.168.1.50`):
+   ```powershell
+   ipconfig
+   ```
+6. From your laptop, confirm Ollama is reachable:
+   ```powershell
+   curl http://192.168.1.50:11434/api/tags
+   ```
+
+Both machines must be on the **same Wi‑Fi / LAN**.
+
+### 2. Point Math-Checker at the GPU PC
+
+On your laptop, create or edit `.env.local` in the project folder:
+
+```env
+OLLAMA_URL=http://192.168.1.50:11434
+OLLAMA_MODEL=qwen3-vl:2b-instruct
+OLLAMA_FAST_MODE=true
+```
+
+Replace `192.168.1.50` with your GPU PC's IP. Rebuild and start the app:
+
+```powershell
+npm run build
+npm run start -- --hostname 0.0.0.0
+```
+
+Open the app and wait until the status line shows **Ollama: ready · Processor: gpu**. Worksheet checks should then finish in about **8–20 seconds**.
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| **Ollama: offline** on laptop | GPU PC is asleep, Ollama not running, or wrong IP in `OLLAMA_URL` |
+| **Processor: cpu** while using remote URL | GPU drivers missing on GPU PC, or model loaded before `OLLAMA_HOST=0.0.0.0` — restart Ollama on the GPU PC |
+| Connection refused from laptop | Windows Firewall blocking port 11434 on the GPU PC |
+| Still ~60s on "GPU" | Use `qwen3-vl:2b-instruct` (not the 4b model) and enable `OLLAMA_FAST_MODE=true` |
+
+Copy `.env.example` to `.env.local` and uncomment the remote GPU lines as a starting template.

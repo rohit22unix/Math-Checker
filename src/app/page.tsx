@@ -235,6 +235,7 @@ export default function Home() {
   const [inputVersion, setInputVersion] = useState(0);
   const [appVersion, setAppVersion] = useState("checking...");
   const [modelStatus, setModelStatus] = useState("starting");
+  const [ollamaProcessor, setOllamaProcessor] = useState("unknown");
 
   useEffect(() => {
     fetch("/api/version")
@@ -248,15 +249,23 @@ export default function Home() {
 
     fetch("/api/warmup", { method: "POST" })
       .then(async (response) => {
+        const payload = (await response.json()) as {
+          processor?: string;
+          error?: string;
+        };
+
         if (!response.ok) {
           setModelStatus("offline");
+          setOllamaProcessor("offline");
           return;
         }
 
         setModelStatus("ready");
+        setOllamaProcessor(payload.processor || "unknown");
       })
       .catch(() => {
         setModelStatus("offline");
+        setOllamaProcessor("offline");
       });
   }, []);
 
@@ -371,7 +380,9 @@ export default function Home() {
     setAnalysisReport("");
     setAnalysisDuration(null);
     setStatusMessage(
-      "Checking Worksheet… Local AI analysis usually takes 1–3 minutes on the first run."
+      ollamaProcessor === "gpu"
+        ? "Checking Worksheet… GPU analysis usually takes 8–20 seconds."
+        : "Checking Worksheet… CPU analysis usually takes 30–90 seconds."
     );
 
     const startedAt = Date.now();
@@ -482,7 +493,7 @@ export default function Home() {
         !report.includes(SERVER_GRADING_MARKER)
       ) {
         setErrorMessage(
-          "This report looks like an older app build. On your laptop run: git pull origin cursor/fix-vision-worksheet-analysis && npm install && npm run build && npm run start -- --hostname 0.0.0.0"
+          "This report looks like an older app build. On your laptop run: git pull origin master && npm install && npm run build && npm run start -- --hostname 0.0.0.0"
         );
       }
 
@@ -641,7 +652,35 @@ export default function Home() {
           </p>
           <p className="mt-1 text-xs text-slate-500">
             App grading engine: {appVersion} · Ollama: {modelStatus}
+            {modelStatus === "ready" ? ` · Processor: ${ollamaProcessor}` : null}
           </p>
+
+          {modelStatus === "ready" &&
+          (ollamaProcessor === "cpu" || ollamaProcessor.startsWith("hybrid")) ? (
+            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              <p className="font-semibold">This laptop is running Ollama on CPU only.</p>
+              <p className="mt-2 leading-6">
+                For ~8–20 second analysis, run Ollama on a home PC with an NVIDIA GPU and
+                point this app at it in <code className="rounded bg-amber-100 px-1">.env.local</code>:
+              </p>
+              <pre className="mt-2 overflow-x-auto rounded-lg bg-amber-100/70 p-3 text-xs leading-5">
+                {`OLLAMA_URL=http://<gpu-pc-ip>:11434
+OLLAMA_MODEL=qwen3-vl:2b-instruct`}
+              </pre>
+              <p className="mt-2 text-xs leading-5 text-amber-800">
+                On the GPU PC: set <code className="rounded bg-amber-100 px-1">OLLAMA_HOST=0.0.0.0</code>,
+                allow Windows Firewall port 11434, and run{" "}
+                <code className="rounded bg-amber-100 px-1">ollama pull qwen3-vl:2b-instruct</code>.
+                See README for the full setup.
+              </p>
+            </div>
+          ) : null}
+
+          {modelStatus === "ready" && ollamaProcessor === "gpu" ? (
+            <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+              Ollama is using your GPU — worksheet analysis should finish in about 8–20 seconds.
+            </div>
+          ) : null}
 
           {analysisReport ? (
             <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">

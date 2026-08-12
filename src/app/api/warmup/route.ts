@@ -18,5 +18,6 @@ export async function POST() {
     status: "ready",
     model: result.model,
     ollamaUrl: result.ollamaUrl,
+    processor: result.processor,
   });
 }
