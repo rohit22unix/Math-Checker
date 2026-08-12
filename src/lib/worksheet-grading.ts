@@ -25,32 +25,83 @@ export function parseExtractedProblems(raw: string): ExtractedProblem[] {
   const fencedMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const jsonMatch = fencedMatch?.[1]?.match(/\[[\s\S]*\]/) || raw.match(/\[[\s\S]*\]/);
 
-  if (!jsonMatch) {
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]) as ExtractedProblem[] | ExtractedProblem;
+
+      if (Array.isArray(parsed)) {
+        return normalizeExtractedProblems(parsed);
+      }
+
+      if (parsed && typeof parsed === "object") {
+        return normalizeExtractedProblems([parsed]);
+      }
+    } catch {
+      // Fall through to single-object parsing.
+    }
+  }
+
+  const objectMatch =
+    fencedMatch?.[1]?.match(/\{[\s\S]*\}/) || raw.match(/\{[\s\S]*\}/);
+
+  if (!objectMatch) {
     return [];
   }
 
   try {
-    const parsed = JSON.parse(jsonMatch[0]) as ExtractedProblem[];
+    const parsed = JSON.parse(objectMatch[0]) as ExtractedProblem;
 
-    if (!Array.isArray(parsed)) {
-      return [];
+    if (parsed && typeof parsed === "object") {
+      return normalizeExtractedProblems([parsed]);
     }
-
-    return parsed
-      .filter((item) => typeof item?.number === "number")
-      .map((item) => ({
-        number: item.number,
-        printed_expression: String(item.printed_expression || "").trim(),
-        last_operation_before_answer: String(
-          item.last_operation_before_answer || ""
-        ).trim(),
-        written_final_answer: String(
-          item.written_final_answer || item.student_final_answer || ""
-        ).trim(),
-      }));
   } catch {
     return [];
   }
+
+  return [];
+}
+
+function normalizeExtractedProblems(items: ExtractedProblem[]): ExtractedProblem[] {
+  return items
+    .filter((item) => typeof item?.number === "number")
+    .map((item) => ({
+      number: item.number,
+      printed_expression: String(item.printed_expression || "").trim(),
+      last_operation_before_answer: String(
+        item.last_operation_before_answer || ""
+      ).trim(),
+      written_final_answer: String(
+        item.written_final_answer || item.student_final_answer || ""
+      ).trim(),
+    }));
+}
+
+export function mergeExtractedProblems(
+  problems: ExtractedProblem[]
+): ExtractedProblem[] {
+  const byNumber = new Map<number, ExtractedProblem>();
+
+  for (const problem of problems) {
+    const existing = byNumber.get(problem.number);
+
+    if (!existing) {
+      byNumber.set(problem.number, problem);
+      continue;
+    }
+
+    byNumber.set(problem.number, {
+      number: problem.number,
+      printed_expression:
+        existing.printed_expression || problem.printed_expression,
+      last_operation_before_answer:
+        existing.last_operation_before_answer ||
+        problem.last_operation_before_answer,
+      written_final_answer:
+        existing.written_final_answer || problem.written_final_answer,
+    });
+  }
+
+  return Array.from(byNumber.values()).sort((left, right) => left.number - right.number);
 }
 
 function latexToPlainMath(input: string): string {

@@ -8,11 +8,14 @@ import {
 import {
   formatGradedReport,
   gradeProblems,
+  mergeExtractedProblems,
   mergeWorkSteps,
   parseExtractedProblems,
   parseWorkSteps,
   problemsNeedingWorkStepPass,
+  type ExtractedProblem,
 } from "@/lib/worksheet-grading";
+import { splitWorksheetIntoQuadrants } from "@/lib/worksheet-image";
 
 export const GRADING_VERSION_MARKER = "Graded by Math-Checker (server-side)";
 
@@ -22,16 +25,29 @@ const CONTEXT_SIZE_ERROR_MESSAGE =
   "This worksheet image needs more AI processing space. Please try again. If the problem continues, use a clearer photo containing only the worksheet page.";
 const TIMEOUT_ERROR_MESSAGE =
   "The local AI timed out. Please try a tighter crop of the worksheet, a clearer photo, or a page with fewer questions.";
-const EXTRACTION_PROMPT = `Read this Kumon math worksheet image.
+const EXTRACTION_PROMPT = `Read this Kumon math worksheet image with four numbered problems: (1) top-left, (2) top-right, (3) bottom-left, (4) bottom-right.
 
-For each problem (1) through (4), return JSON with:
+You MUST return a JSON array with exactly 4 objects, one per problem number 1 through 4.
+If handwriting is hard to read, still include the problem with your best guess or "unclear" for missing fields.
+
+Each object needs:
+- number: 1, 2, 3, or 4
 - printed_expression: plain text like "3/8 / (7/9 * 9/14)" — never LaTeX
 - last_operation_before_answer: plain text like "3/8 * 2/1"
 - written_final_answer: plain fraction like "3/4"
 
 Use plain fractions only (example: 3/4). No LaTeX, no decimals, no grading.
 Return ONLY JSON:
-[{"number":1,"printed_expression":"3/8 / (7/9 * 9/14)","last_operation_before_answer":"3/8 * 2/1","written_final_answer":"3/4"}]`;
+[{"number":1,"printed_expression":"3/8 / (7/9 * 9/14)","last_operation_before_answer":"3/8 * 2/1","written_final_answer":"3/4"},{"number":2,...},{"number":3,...},{"number":4,...}]`;
+
+const QUADRANT_EXTRACTION_PROMPT = (number: number) => `This image is a close crop of Kumon worksheet problem (${number}).
+
+Read the printed expression and the student's handwritten work and final answer.
+
+Return ONLY one JSON object:
+{"number":${number},"printed_expression":"3/8 / (7/9 * 9/14)","last_operation_before_answer":"3/8 * 2/1","written_final_answer":"3/4"}
+
+Use plain fractions only. No LaTeX. No markdown.`;
 
 const WORK_STEP_PROMPT = `Look at this Kumon worksheet again.
 
@@ -130,6 +146,7 @@ async function extractWorksheetProblems(
         base64Image,
         keepAlive,
         fastMode,
+        purpose: "extraction",
       });
 
       if (workStepResponse.ok) {
@@ -147,6 +164,59 @@ async function extractWorksheetProblems(
   }
 
   return { extracted, needsAppUpdate: false };
+}
+
+async function extractMissingQuadrants(
+  ollamaUrl: string,
+  ollamaModel: string,
+  imageBuffer: Buffer,
+  existing: ExtractedProblem[],
+  keepAlive: string,
+  fastMode: boolean
+) {
+  const foundNumbers = new Set(existing.map((problem) => problem.number));
+  const missingNumbers = [1, 2, 3, 4].filter((number) => !foundNumbers.has(number));
+
+  if (!missingNumbers.length) {
+    return existing;
+  }
+
+  const quadrants = await splitWorksheetIntoQuadrants(imageBuffer);
+  const quadrantResults: ExtractedProblem[] = [...existing];
+
+  for (const quadrant of quadrants) {
+    if (!missingNumbers.includes(quadrant.number)) {
+      continue;
+    }
+
+    try {
+      const response = await callOllamaChat({
+        ollamaUrl,
+        model: ollamaModel,
+        prompt: QUADRANT_EXTRACTION_PROMPT(quadrant.number),
+        base64Image: quadrant.base64Image,
+        keepAlive,
+        fastMode,
+        purpose: "extraction",
+      });
+
+      if (!response.ok) {
+        continue;
+      }
+
+      const payload = await response.json();
+      const text = extractAnalysisText(payload);
+      const parsed = text ? parseExtractedProblems(text) : [];
+
+      if (parsed.length) {
+        quadrantResults.push(...parsed);
+      }
+    } catch {
+      // Try the remaining quadrants.
+    }
+  }
+
+  return mergeExtractedProblems(quadrantResults);
 }
 
 export async function POST(request: Request) {
@@ -186,7 +256,8 @@ export async function POST(request: Request) {
 
     const { ollamaModel, candidateUrls, keepAlive, fastMode } = getOllamaConfig();
     const arrayBuffer = await file.arrayBuffer();
-    const base64Image = Buffer.from(arrayBuffer).toString("base64");
+    const imageBuffer = Buffer.from(arrayBuffer);
+    const base64Image = imageBuffer.toString("base64");
 
     let ollamaResponse: Response | null = null;
     let selectedOllamaUrl = "";
@@ -201,6 +272,7 @@ export async function POST(request: Request) {
           base64Image,
           keepAlive,
           fastMode,
+          purpose: "extraction",
         });
 
         if (ollamaResponse.ok) {
@@ -260,10 +332,11 @@ export async function POST(request: Request) {
       const retryResponse = await callOllamaChat({
         ollamaUrl: selectedOllamaUrl,
         model: ollamaModel,
-        prompt: `${EXTRACTION_PROMPT}\n\nRespond with JSON only. Use plain fractions like 3/4, never LaTeX.`,
+        prompt: `${EXTRACTION_PROMPT}\n\nRespond with JSON only. Include all 4 problems. Use plain fractions like 3/4, never LaTeX.`,
         base64Image,
         keepAlive,
         fastMode,
+        purpose: "extraction",
       });
 
       if (retryResponse.ok) {
@@ -274,6 +347,28 @@ export async function POST(request: Request) {
           ollamaModel,
           base64Image,
           rawAnalysis,
+          keepAlive,
+          fastMode
+        ));
+      }
+    }
+
+    if (extracted.length > 0 && extracted.length < 4 && selectedOllamaUrl) {
+      extracted = await extractMissingQuadrants(
+        selectedOllamaUrl,
+        ollamaModel,
+        imageBuffer,
+        extracted,
+        keepAlive,
+        fastMode
+      );
+
+      if (problemsNeedingWorkStepPass(extracted).length > 0) {
+        ({ extracted } = await extractWorksheetProblems(
+          selectedOllamaUrl,
+          ollamaModel,
+          base64Image,
+          JSON.stringify(extracted),
           keepAlive,
           fastMode
         ));

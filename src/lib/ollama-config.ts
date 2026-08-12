@@ -26,7 +26,18 @@ export function getOllamaConfig() {
   return { ollamaModel, candidateUrls, keepAlive, fastMode, remoteOllama: Boolean(configuredUrl) };
 }
 
-export function getOllamaOptions(fastMode = false) {
+export function getOllamaOptions(
+  fastMode = false,
+  purpose: "chat" | "extraction" = "chat"
+) {
+  if (purpose === "extraction") {
+    return {
+      temperature: 0.0,
+      num_ctx: fastMode ? 3072 : 4096,
+      num_predict: fastMode ? 480 : 560,
+    };
+  }
+
   if (fastMode) {
     return {
       temperature: 0.0,
@@ -49,6 +60,7 @@ export async function callOllamaChat(params: {
   base64Image?: string;
   keepAlive?: string;
   fastMode?: boolean;
+  purpose?: "chat" | "extraction";
   timeoutMs?: number;
 }): Promise<Response> {
   const message: {
@@ -73,7 +85,7 @@ export async function callOllamaChat(params: {
       model: params.model,
       stream: false,
       keep_alive: params.keepAlive || DEFAULT_KEEP_ALIVE,
-      options: getOllamaOptions(params.fastMode),
+      options: getOllamaOptions(params.fastMode, params.purpose || "chat"),
       messages: [message],
     }),
     signal: AbortSignal.timeout(params.timeoutMs ?? ANALYSIS_TIMEOUT_MS),
