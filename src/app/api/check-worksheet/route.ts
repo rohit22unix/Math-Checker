@@ -3,12 +3,31 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 
 const DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434";
-const DEFAULT_OLLAMA_MODEL = "qwen3-vl:4b";
-const ANALYSIS_TIMEOUT_MS = 35_000;
+const DEFAULT_OLLAMA_MODEL = "qwen3-vl:4b-instruct";
+const ANALYSIS_TIMEOUT_MS = 180_000;
+const OLLAMA_OPTIONS = {
+  temperature: 0.0,
+  num_ctx: 8192,
+  num_predict: 640,
+};
 const CONTEXT_SIZE_ERROR_MESSAGE =
   "This worksheet image needs more AI processing space. Please try again. If the problem continues, use a clearer photo containing only the worksheet page.";
 const TIMEOUT_ERROR_MESSAGE =
   "The local AI timed out. Please try a tighter crop of the worksheet, a clearer photo, or a page with fewer questions.";
+const WORKSHEET_PROMPT = `You are checking one Kumon-style math worksheet image.
+Only use content that is clearly visible.
+Ignore the name/date area, score boxes, page borders, shadows, and faint scratch work.
+Focus on the numbered problems on the page, usually (1) through (4).
+For each visible problem, identify:
+- the printed expression
+- the student's final answer only, not intermediate steps
+- one status: Correct, Incorrect, Unanswered, or Unclear
+If the final answer is not clearly isolated from the student's scratch work, mark it Unclear.
+Return very short output in this format:
+Summary: total visible problems, correct, incorrect, unanswered, unclear.
+1. problem | student answer | correct answer | status
+2. ...
+Keep the response brief.`;
 
 function getOllamaConfig() {
   const ollamaModel = process.env.OLLAMA_MODEL?.trim() || DEFAULT_OLLAMA_MODEL;
@@ -68,11 +87,13 @@ function toFriendlyOllamaErrorMessage(rawMessage: string): string {
 
 function extractAnalysisText(payload: unknown): string {
   const record = payload as Record<string, unknown>;
+  const message = record?.message as Record<string, unknown> | undefined;
 
   const value =
+    message?.content ||
     record?.response ||
-    (record?.message as Record<string, unknown> | undefined)?.content ||
-    (record?.message as Record<string, unknown> | undefined)?.thinking ||
+    record?.thinking ||
+    message?.thinking ||
     ((record?.choices as Array<Record<string, unknown>> | undefined)?.[0]
       ?.message as Record<string, unknown> | undefined)?.content ||
     "";
@@ -108,8 +129,34 @@ function extractFallbackText(payload: unknown): string {
 
   walk(payload);
 
-  // Prefer the longest non-empty textual field as a best-effort fallback.
   return candidates.sort((a, b) => b.length - a.length)[0] || "";
+}
+
+async function callOllamaChat(
+  ollamaUrl: string,
+  model: string,
+  base64Image: string,
+  prompt: string
+): Promise<Response> {
+  return fetch(`${ollamaUrl}/api/chat`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      stream: false,
+      options: OLLAMA_OPTIONS,
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+          images: [base64Image],
+        },
+      ],
+    }),
+    signal: AbortSignal.timeout(ANALYSIS_TIMEOUT_MS),
+  });
 }
 
 export async function POST(request: Request) {
@@ -151,53 +198,22 @@ export async function POST(request: Request) {
     const arrayBuffer = await file.arrayBuffer();
     const base64Image = Buffer.from(arrayBuffer).toString("base64");
 
-      const prompt = `You are checking one Kumon-style math worksheet image.
-    Only use content that is clearly visible.
-    Ignore the name/date area, score boxes, page borders, shadows, and faint scratch work.
-    Focus on the numbered problems on the page, usually (1) through (4).
-    For each visible problem, identify:
-    - the printed expression
-    - the student's final answer only, not intermediate steps
-    - one status: Correct, Incorrect, Unanswered, or Unclear
-    If the final answer is not clearly isolated from the student's scratch work, mark it Unclear.
-    Return very short output in this format:
-    Summary: total visible problems, correct, incorrect, unanswered, unclear.
-    1. problem | student answer | correct answer | status
-    2. ...
-    Keep the response brief.`;
-
     let ollamaResponse: Response | null = null;
-    let selectedOllamaUrl = "";
-    let lastFetchError: unknown = null;
     let lastOllamaErrorDetail = "";
 
     for (const ollamaUrl of candidateUrls) {
       try {
-        ollamaResponse = await fetch(`${ollamaUrl}/api/generate`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: ollamaModel,
-            stream: false,
-            prompt,
-            images: [base64Image],
-            options: {
-              temperature: 0.0,
-              num_ctx: 2048,
-              num_predict: 320,
-            },
-          }),
-          signal: AbortSignal.timeout(ANALYSIS_TIMEOUT_MS),
-        });
+        ollamaResponse = await callOllamaChat(
+          ollamaUrl,
+          ollamaModel,
+          base64Image,
+          WORKSHEET_PROMPT
+        );
 
         if (ollamaResponse.ok) {
-          selectedOllamaUrl = ollamaUrl;
           break;
         }
 
-        // Non-OK from Ollama is a model-side outcome, not a host failover case.
         lastOllamaErrorDetail = await ollamaResponse.text();
         break;
       } catch (error) {
@@ -207,14 +223,15 @@ export async function POST(request: Request) {
             { status: 504 }
           );
         }
-
-        lastFetchError = error;
       }
     }
 
     if (!ollamaResponse) {
       return NextResponse.json(
-        { error: "Could not reach the local Ollama server. Please make sure Ollama is running." },
+        {
+          error:
+            "Could not reach the local Ollama server. Please make sure Ollama is running.",
+        },
         { status: 502 }
       );
     }
@@ -234,42 +251,6 @@ export async function POST(request: Request) {
 
     const payload = await ollamaResponse.json();
     let analysisText = extractAnalysisText(payload);
-
-    if (!analysisText && selectedOllamaUrl) {
-      try {
-        const fallbackResponse = await fetch(`${selectedOllamaUrl}/api/chat`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: ollamaModel,
-            stream: false,
-            options: {
-              temperature: 0.0,
-              num_ctx: 1024,
-              num_predict: 180,
-            },
-            messages: [
-              {
-                role: "user",
-                content:
-                  "Describe only the clearly readable worksheet content and any visible final answers. Keep it very short.",
-                images: [base64Image],
-              },
-            ],
-          }),
-          signal: AbortSignal.timeout(12_000),
-        });
-
-        if (fallbackResponse.ok) {
-          const fallbackPayload = await fallbackResponse.json();
-          analysisText = extractAnalysisText(fallbackPayload);
-        }
-      } catch {
-        // Keep the original empty result behavior if fallback request fails.
-      }
-    }
 
     if (!analysisText) {
       analysisText = extractFallbackText(payload);
