@@ -127,3 +127,83 @@ Open the app and wait until the status line shows **Ollama: ready · Processor: 
 | Still ~60s on "GPU" | Use `qwen3-vl:2b-instruct` (not the 4b model) and enable `OLLAMA_FAST_MODE=true` |
 
 Copy `.env.example` to `.env.local` and uncomment the remote GPU lines as a starting template.
+
+## Rent a cloud GPU (no GPU PC at home)
+
+If you have **no NVIDIA GPU anywhere**, you can rent one by the hour and still use **free Ollama** (no OpenAI/Google vision API). Math-Checker stays on your laptop; only the vision model runs in the cloud.
+
+### Cost (typical)
+
+| Provider | GPU example | ~Price | Worksheet session (~15 min) |
+|---|---|---|---|
+| [RunPod](https://www.runpod.io/console/pods) | RTX 3060 / 3070 | $0.15–0.25/hr | ~$0.04–0.06 |
+| [RunPod](https://www.runpod.io/console/pods) | RTX 4090 | ~$0.44/hr | ~$0.11 |
+| [Vast.ai](https://vast.ai) | Spot GPUs | often cheaper | varies |
+
+**Stop the pod when you finish** — you only pay while it is running. A few homework checks per week is usually well under a dollar.
+
+### Option A — RunPod (easiest)
+
+1. Create a [RunPod](https://www.runpod.io) account and add billing.
+2. **Pods → Deploy** → pick a GPU with **≥ 8 GB VRAM** (RTX 3060/3070 is enough for `qwen3-vl:2b-instruct`).
+3. Use the **Ollama** template from the RunPod hub, or PyTorch + install Ollama manually.
+4. In pod settings:
+   - Expose HTTP port **11434**
+   - Set env var **`OLLAMA_HOST=0.0.0.0`**
+   - (Optional) Attach a **network volume** at `/workspace` and set `OLLAMA_MODELS=/workspace/ollama-models` so the model survives restarts.
+5. Open the **Web Terminal** on the pod and pull the model:
+   ```bash
+   ollama pull qwen3-vl:2b-instruct
+   ```
+6. Copy the pod’s **proxy URL** for port 11434 (looks like `https://xxxxxxxx-11434.proxy.runpod.net`).
+7. On your laptop, create `.env.local`:
+   ```env
+   OLLAMA_URL=https://xxxxxxxx-11434.proxy.runpod.net
+   OLLAMA_MODEL=qwen3-vl:2b-instruct
+   OLLAMA_FAST_MODE=true
+   ```
+8. Rebuild and start Math-Checker:
+   ```powershell
+   npm run build
+   npm run start -- --hostname 0.0.0.0
+   ```
+9. Open the app — status should show **Processor: gpu**. When done checking worksheets, **Stop** the pod in RunPod.
+
+Official RunPod guide: [docs.runpod.io/tutorials/pods/run-ollama](https://docs.runpod.io/tutorials/pods/run-ollama)
+
+### Option B — SSH tunnel (more private)
+
+If your cloud provider gives you SSH access instead of an HTTPS proxy, tunnel Ollama to your laptop so nothing is publicly exposed:
+
+```powershell
+ssh -L 11434:127.0.0.1:11434 root@YOUR_CLOUD_IP -N
+```
+
+Leave that window open. In `.env.local`:
+
+```env
+OLLAMA_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen3-vl:2b-instruct
+OLLAMA_FAST_MODE=true
+```
+
+Math-Checker talks to `localhost:11434`; traffic is forwarded over SSH to Ollama on the GPU machine.
+
+### Cloud troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| **Ollama: offline** | Pod stopped, wrong proxy URL, or model not pulled yet |
+| **Processor: cpu** on cloud pod | GPU not attached — redeploy with a CUDA-capable template |
+| HTTPS / certificate errors | Use the RunPod proxy URL exactly as shown (include `https://`) |
+| Bill keeps growing | Stop the pod in the provider dashboard when not in use |
+| Still slow first run | Normal — first request loads the model; later ones are faster |
+
+### Stay on CPU instead?
+
+If you only check worksheets occasionally and ~30–60 seconds is fine, keep Ollama on your laptop with no cloud cost:
+
+```env
+OLLAMA_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen3-vl:2b-instruct
+```

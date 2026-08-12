@@ -658,20 +658,21 @@ export default function Home() {
           {modelStatus === "ready" &&
           (ollamaProcessor === "cpu" || ollamaProcessor.startsWith("hybrid")) ? (
             <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              <p className="font-semibold">This laptop is running Ollama on CPU only.</p>
+              <p className="font-semibold">Ollama is running on CPU — analysis takes ~30–90 seconds.</p>
               <p className="mt-2 leading-6">
-                For ~8–20 second analysis, run Ollama on a home PC with an NVIDIA GPU and
-                point this app at it in <code className="rounded bg-amber-100 px-1">.env.local</code>:
+                For ~8–20 second checks, use a GPU via a home PC or rent one by the hour (RunPod,
+                Vast.ai). Point this app at remote Ollama in{" "}
+                <code className="rounded bg-amber-100 px-1">.env.local</code>:
               </p>
               <pre className="mt-2 overflow-x-auto rounded-lg bg-amber-100/70 p-3 text-xs leading-5">
-                {`OLLAMA_URL=http://<gpu-pc-ip>:11434
-OLLAMA_MODEL=qwen3-vl:2b-instruct`}
+                {`# RunPod example:
+OLLAMA_URL=https://xxxxxxxx-11434.proxy.runpod.net
+OLLAMA_MODEL=qwen3-vl:2b-instruct
+OLLAMA_FAST_MODE=true`}
               </pre>
               <p className="mt-2 text-xs leading-5 text-amber-800">
-                On the GPU PC: set <code className="rounded bg-amber-100 px-1">OLLAMA_HOST=0.0.0.0</code>,
-                allow Windows Firewall port 11434, and run{" "}
-                <code className="rounded bg-amber-100 px-1">ollama pull qwen3-vl:2b-instruct</code>.
-                See README for the full setup.
+                Stop the cloud pod when you finish to keep cost low (~$0.04–0.11 per short session).
+                See README for RunPod setup and SSH tunnel options.
               </p>
             </div>
           ) : null}
