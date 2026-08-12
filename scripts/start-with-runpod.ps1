@@ -5,6 +5,24 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot\..
 
+function Stop-PortListener {
+    param([int]$Port)
+
+    $connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+
+    foreach ($connection in $connections) {
+        $processId = $connection.OwningProcess
+
+        if ($processId -and $processId -ne 0) {
+            Write-Host "Stopping process $processId using port $Port ..." -ForegroundColor Yellow
+            Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Stop-PortListener -Port 3000
+Start-Sleep -Seconds 1
+
 Write-Host "Checking Ollama tunnel on http://127.0.0.1:11434 ..." -ForegroundColor Cyan
 
 try {
