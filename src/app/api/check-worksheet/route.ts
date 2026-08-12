@@ -1,6 +1,14 @@
 import { NextResponse } from "next/server";
 
-import { gradeWorksheetFromModelText } from "@/lib/worksheet-grading";
+import {
+  gradeProblems,
+  gradeWorksheetFromModelText,
+  mergeWorkSteps,
+  parseExtractedProblems,
+  parseWorkSteps,
+  problemsMissingWorkSteps,
+  formatGradedReport,
+} from "@/lib/worksheet-grading";
 
 export const runtime = "nodejs";
 
@@ -31,6 +39,13 @@ Rules:
 
 Return ONLY a valid JSON array with no markdown:
 [{"number":1,"printed_expression":"...","last_operation_before_answer":"...","written_final_answer":"..."}]`;
+
+const WORK_STEP_PROMPT = `Look at this Kumon worksheet again.
+
+For each numbered problem (1) through (4), read the student's last line of work immediately before the final equals sign and answer. Examples: "3/8 x 2/1", "1/2 x 8/5", "1/2 - 3/8".
+
+Return ONLY valid JSON, no markdown:
+[{"number":1,"last_operation_before_answer":"3/8 x 2/1"}]`;
 
 function getOllamaConfig() {
   const ollamaModel = process.env.OLLAMA_MODEL?.trim() || DEFAULT_OLLAMA_MODEL;
@@ -104,37 +119,6 @@ function extractAnalysisText(payload: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function extractFallbackText(payload: unknown): string {
-  const candidates: string[] = [];
-
-  function walk(value: unknown) {
-    if (typeof value === "string") {
-      const trimmed = value.trim();
-      if (trimmed.length >= 12) {
-        candidates.push(trimmed);
-      }
-      return;
-    }
-
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        walk(item);
-      }
-      return;
-    }
-
-    if (value && typeof value === "object") {
-      for (const nestedValue of Object.values(value as Record<string, unknown>)) {
-        walk(nestedValue);
-      }
-    }
-  }
-
-  walk(payload);
-
-  return candidates.sort((a, b) => b.length - a.length)[0] || "";
-}
-
 async function callOllamaChat(
   ollamaUrl: string,
   model: string,
@@ -202,6 +186,7 @@ export async function POST(request: Request) {
     const base64Image = Buffer.from(arrayBuffer).toString("base64");
 
     let ollamaResponse: Response | null = null;
+    let selectedOllamaUrl = "";
     let lastOllamaErrorDetail = "";
 
     for (const ollamaUrl of candidateUrls) {
@@ -214,6 +199,7 @@ export async function POST(request: Request) {
         );
 
         if (ollamaResponse.ok) {
+          selectedOllamaUrl = ollamaUrl;
           break;
         }
 
@@ -254,17 +240,45 @@ export async function POST(request: Request) {
 
     const payload = await ollamaResponse.json();
     const rawAnalysis = extractAnalysisText(payload);
-    let analysisText = rawAnalysis ? gradeWorksheetFromModelText(rawAnalysis) : null;
+    let extracted = rawAnalysis ? parseExtractedProblems(rawAnalysis) : [];
 
-    if (!analysisText) {
-      analysisText = extractFallbackText(payload);
+    if (extracted.length && problemsMissingWorkSteps(extracted).length > 0) {
+      if (selectedOllamaUrl) {
+        try {
+          const workStepResponse = await callOllamaChat(
+            selectedOllamaUrl,
+            ollamaModel,
+            base64Image,
+            WORK_STEP_PROMPT
+          );
+
+          if (workStepResponse.ok) {
+            const workStepPayload = await workStepResponse.json();
+            const workStepText = extractAnalysisText(workStepPayload);
+            const workSteps = workStepText ? parseWorkSteps(workStepText) : [];
+
+            if (workSteps.length) {
+              extracted = mergeWorkSteps(extracted, workSteps);
+            }
+          }
+        } catch {
+          // Keep first-pass extraction if the work-step request fails.
+        }
+      }
     }
+
+    let analysisText =
+      extracted.length > 0
+        ? formatGradedReport(gradeProblems(extracted))
+        : rawAnalysis
+          ? gradeWorksheetFromModelText(rawAnalysis)
+          : null;
 
     if (!analysisText) {
       return NextResponse.json(
         {
           analysis:
-            "The local model could not extract readable worksheet text from this image. Try cropping to one worked problem at a time, improving lighting, and removing shadows. If possible, upload separate photos for top and bottom halves.",
+            "The local model did not return structured worksheet data. Please restart the app to pick up the latest version, then try again with a clear photo.",
         },
         { status: 200 }
       );

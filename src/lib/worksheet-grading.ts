@@ -22,14 +22,17 @@ export type GradedProblem = {
 };
 
 export function parseExtractedProblems(raw: string): ExtractedProblem[] {
-  const jsonMatch = raw.match(/\[[\s\S]*\]/);
+  const fencedMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const jsonMatch = fencedMatch?.[1]?.match(/\[[\s\S]*\]/) || raw.match(/\[[\s\S]*\]/);
 
   if (!jsonMatch) {
     return [];
   }
 
+  const jsonText = jsonMatch[0];
+
   try {
-    const parsed = JSON.parse(jsonMatch[0]) as ExtractedProblem[];
+    const parsed = JSON.parse(jsonText) as ExtractedProblem[];
 
     if (!Array.isArray(parsed)) {
       return [];
@@ -222,6 +225,7 @@ export function formatGradedReport(problems: GradedProblem[]): string {
   }
 
   const lines = [
+    "Graded by Math-Checker (server-side)",
     `Summary: ${problems.length} visible, ${counts.correct} correct, ${counts.incorrect} incorrect, ${counts.unanswered} unanswered, ${counts.unclear} unclear.`,
   ];
 
@@ -246,4 +250,65 @@ export function gradeWorksheetFromModelText(raw: string): string | null {
   }
 
   return formatGradedReport(gradeProblems(extracted));
+}
+
+export function parseWorkSteps(
+  raw: string
+): Array<{ number: number; last_operation_before_answer: string }> {
+  const jsonMatch =
+    raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.match(/\[[\s\S]*\]/) ||
+    raw.match(/\[[\s\S]*\]/);
+
+  if (!jsonMatch) {
+    return [];
+  }
+
+  const jsonText = jsonMatch[0];
+
+  try {
+    const parsed = JSON.parse(jsonText) as Array<{
+      number?: number;
+      last_operation_before_answer?: string;
+    }>;
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .filter((item) => typeof item?.number === "number")
+      .map((item) => ({
+        number: item.number as number,
+        last_operation_before_answer: String(
+          item.last_operation_before_answer || ""
+        ).trim(),
+      }))
+      .filter((item) => item.last_operation_before_answer.length > 0);
+  } catch {
+    return [];
+  }
+}
+export function mergeWorkSteps(
+  problems: ExtractedProblem[],
+  workSteps: Array<{ number: number; last_operation_before_answer: string }>
+): ExtractedProblem[] {
+  const workByNumber = new Map<number, string>();
+
+  for (const step of workSteps) {
+    workByNumber.set(step.number, step.last_operation_before_answer);
+  }
+
+  return problems.map((problem) => ({
+    ...problem,
+    last_operation_before_answer:
+      problem.last_operation_before_answer ||
+      workByNumber.get(problem.number) ||
+      "",
+  }));
+}
+
+export function problemsMissingWorkSteps(
+  problems: ExtractedProblem[]
+): ExtractedProblem[] {
+  return problems.filter((problem) => !problem.last_operation_before_answer);
 }
