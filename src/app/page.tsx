@@ -4,7 +4,7 @@ import type { ChangeEvent } from "react";
 import { useEffect, useState } from "react";
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-const MAX_IMAGE_EDGE = 1000;
+const MAX_IMAGE_EDGE = 1400;
 const AGGRESSIVE_MAX_IMAGE_EDGE = 760;
 const OPTIMIZED_UPLOAD_BYTES = 1.5 * 1024 * 1024;
 const ANALYSIS_TIMEOUT_MS = 190_000;
@@ -30,7 +30,7 @@ function renameAsJpeg(fileName: string) {
 }
 
 async function optimizeWorksheetImage(file: File): Promise<File> {
-  return optimizeWorksheetImageWithSettings(file, MAX_IMAGE_EDGE, 0.74);
+  return optimizeWorksheetImageWithSettings(file, MAX_IMAGE_EDGE, 0.82);
 }
 
 async function optimizeWorksheetImageAggressive(file: File): Promise<File> {
@@ -490,7 +490,8 @@ export default function Home() {
             <ul className="mt-2 list-disc space-y-1 pl-5">
               <li>Use good lighting and keep the page flat.</li>
                 <li>Avoid strong shadows from your phone or your hand.</li>
-                <li>Crop close to the worked problems so the fractions stay readable.</li>
+              <li>Crop close to the worked problems so the fractions stay readable.</li>
+              <li>Write final answers clearly; a messy 4 can be misread as 9.</li>
               <li>Photos are processed locally and are not permanently stored.</li>
             </ul>
           </div>

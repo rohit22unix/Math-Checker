@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { gradeWorksheetFromModelText } from "@/lib/worksheet-grading";
+
 export const runtime = "nodejs";
 
 const DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434";
@@ -14,20 +16,21 @@ const CONTEXT_SIZE_ERROR_MESSAGE =
   "This worksheet image needs more AI processing space. Please try again. If the problem continues, use a clearer photo containing only the worksheet page.";
 const TIMEOUT_ERROR_MESSAGE =
   "The local AI timed out. Please try a tighter crop of the worksheet, a clearer photo, or a page with fewer questions.";
-const WORKSHEET_PROMPT = `You are checking one Kumon-style math worksheet image.
-Only use content that is clearly visible.
-Ignore the name/date area, score boxes, page borders, shadows, and faint scratch work.
-Focus on the numbered problems on the page, usually (1) through (4).
-For each visible problem, identify:
-- the printed expression
-- the student's final answer only, not intermediate steps
-- one status: Correct, Incorrect, Unanswered, or Unclear
-If the final answer is not clearly isolated from the student's scratch work, mark it Unclear.
-Return very short output in this format:
-Summary: total visible problems, correct, incorrect, unanswered, unclear.
-1. problem | student answer | correct answer | status
-2. ...
-Keep the response brief.`;
+const EXTRACTION_PROMPT = `Read this Kumon-style math worksheet image.
+
+For each numbered problem (1) through (4), extract:
+- printed_expression: the printed problem exactly as shown
+- last_operation_before_answer: the student's last operation line before the final answer (e.g. "3/8 x 2/1" or "1/2 - 3/8"). Ignore scratch cancellations.
+- written_final_answer: the fraction written after the last equals sign
+
+Rules:
+- Ignore name/date boxes, score tables, borders, and shadows.
+- Do not grade or compute answers.
+- For handwritten digits, look carefully at 4 vs 9, 1 vs 7, and 6 vs 0.
+- If the final digit is ambiguous, write "unclear".
+
+Return ONLY a valid JSON array with no markdown:
+[{"number":1,"printed_expression":"...","last_operation_before_answer":"...","written_final_answer":"..."}]`;
 
 function getOllamaConfig() {
   const ollamaModel = process.env.OLLAMA_MODEL?.trim() || DEFAULT_OLLAMA_MODEL;
@@ -207,7 +210,7 @@ export async function POST(request: Request) {
           ollamaUrl,
           ollamaModel,
           base64Image,
-          WORKSHEET_PROMPT
+          EXTRACTION_PROMPT
         );
 
         if (ollamaResponse.ok) {
@@ -250,7 +253,8 @@ export async function POST(request: Request) {
     }
 
     const payload = await ollamaResponse.json();
-    let analysisText = extractAnalysisText(payload);
+    const rawAnalysis = extractAnalysisText(payload);
+    let analysisText = rawAnalysis ? gradeWorksheetFromModelText(rawAnalysis) : null;
 
     if (!analysisText) {
       analysisText = extractFallbackText(payload);
