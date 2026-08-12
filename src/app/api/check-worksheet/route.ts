@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 
 import {
+  ANALYSIS_TIMEOUT_MS,
+  callOllamaChat,
+  getOllamaConfig,
+} from "@/lib/ollama-config";
+import {
   formatGradedReport,
   gradeProblems,
   mergeWorkSteps,
@@ -13,14 +18,6 @@ export const GRADING_VERSION_MARKER = "Graded by Math-Checker (server-side)";
 
 export const runtime = "nodejs";
 
-const DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434";
-const DEFAULT_OLLAMA_MODEL = "qwen3-vl:2b-instruct";
-const ANALYSIS_TIMEOUT_MS = 120_000;
-const OLLAMA_OPTIONS = {
-  temperature: 0.0,
-  num_ctx: 4096,
-  num_predict: 320,
-};
 const CONTEXT_SIZE_ERROR_MESSAGE =
   "This worksheet image needs more AI processing space. Please try again. If the problem continues, use a clearer photo containing only the worksheet page.";
 const TIMEOUT_ERROR_MESSAGE =
@@ -41,22 +38,7 @@ const WORK_STEP_PROMPT = `Look at this Kumon worksheet again.
 For each numbered problem (1) through (4), read the student's last line of work immediately before the final equals sign and answer. Examples: "3/8 x 2/1", "1/2 x 8/5", "1/2 - 3/8".
 
 Return ONLY valid JSON, no markdown:
-[{"number":1,"last_operation_before_answer":"3/8 x 2/1"}]`;
-
-function getOllamaConfig() {
-  const ollamaModel = process.env.OLLAMA_MODEL?.trim() || DEFAULT_OLLAMA_MODEL;
-  const configuredUrl = process.env.OLLAMA_URL?.trim();
-
-  const candidateUrls = Array.from(
-    new Set(
-      [configuredUrl, DEFAULT_OLLAMA_URL, "http://localhost:11434"].filter(
-        (value): value is string => Boolean(value)
-      )
-    )
-  );
-
-  return { ollamaModel, candidateUrls };
-}
+[{"number":1,"last_operation_before_answer":"3/8 * 2/1"}]`;
 
 function extractOllamaErrorMessage(payload: unknown): string {
   if (typeof payload === "string") {
@@ -126,7 +108,9 @@ async function extractWorksheetProblems(
   ollamaUrl: string,
   ollamaModel: string,
   base64Image: string,
-  rawAnalysis: string
+  rawAnalysis: string,
+  keepAlive: string,
+  fastMode: boolean
 ) {
   let extracted = rawAnalysis ? parseExtractedProblems(rawAnalysis) : [];
 
@@ -139,12 +123,14 @@ async function extractWorksheetProblems(
 
   if (extracted.length && problemsNeedingWorkStepPass(extracted).length > 0) {
     try {
-      const workStepResponse = await callOllamaChat(
+      const workStepResponse = await callOllamaChat({
         ollamaUrl,
-        ollamaModel,
+        model: ollamaModel,
+        prompt: WORK_STEP_PROMPT,
         base64Image,
-        WORK_STEP_PROMPT
-      );
+        keepAlive,
+        fastMode,
+      });
 
       if (workStepResponse.ok) {
         const workStepPayload = await workStepResponse.json();
@@ -161,33 +147,6 @@ async function extractWorksheetProblems(
   }
 
   return { extracted, needsAppUpdate: false };
-}
-
-async function callOllamaChat(
-  ollamaUrl: string,
-  model: string,
-  base64Image: string,
-  prompt: string
-): Promise<Response> {
-  return fetch(`${ollamaUrl}/api/chat`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      stream: false,
-      options: OLLAMA_OPTIONS,
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-          images: [base64Image],
-        },
-      ],
-    }),
-    signal: AbortSignal.timeout(ANALYSIS_TIMEOUT_MS),
-  });
 }
 
 export async function POST(request: Request) {
@@ -225,7 +184,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const { ollamaModel, candidateUrls } = getOllamaConfig();
+    const { ollamaModel, candidateUrls, keepAlive, fastMode } = getOllamaConfig();
     const arrayBuffer = await file.arrayBuffer();
     const base64Image = Buffer.from(arrayBuffer).toString("base64");
 
@@ -235,12 +194,14 @@ export async function POST(request: Request) {
 
     for (const ollamaUrl of candidateUrls) {
       try {
-        ollamaResponse = await callOllamaChat(
+        ollamaResponse = await callOllamaChat({
           ollamaUrl,
-          ollamaModel,
+          model: ollamaModel,
+          prompt: EXTRACTION_PROMPT,
           base64Image,
-          EXTRACTION_PROMPT
-        );
+          keepAlive,
+          fastMode,
+        });
 
         if (ollamaResponse.ok) {
           selectedOllamaUrl = ollamaUrl;
@@ -289,17 +250,21 @@ export async function POST(request: Request) {
           selectedOllamaUrl,
           ollamaModel,
           base64Image,
-          rawAnalysis
+          rawAnalysis,
+          keepAlive,
+          fastMode
         )
       : { extracted: [], needsAppUpdate: false };
 
     if (!extracted.length && selectedOllamaUrl && !needsAppUpdate) {
-      const retryResponse = await callOllamaChat(
-        selectedOllamaUrl,
-        ollamaModel,
+      const retryResponse = await callOllamaChat({
+        ollamaUrl: selectedOllamaUrl,
+        model: ollamaModel,
+        prompt: `${EXTRACTION_PROMPT}\n\nRespond with JSON only. Use plain fractions like 3/4, never LaTeX.`,
         base64Image,
-        `${EXTRACTION_PROMPT}\n\nRespond with JSON only. Use plain fractions like 3/4, never LaTeX.`
-      );
+        keepAlive,
+        fastMode,
+      });
 
       if (retryResponse.ok) {
         const retryPayload = await retryResponse.json();
@@ -308,7 +273,9 @@ export async function POST(request: Request) {
           selectedOllamaUrl,
           ollamaModel,
           base64Image,
-          rawAnalysis
+          rawAnalysis,
+          keepAlive,
+          fastMode
         ));
       }
     }

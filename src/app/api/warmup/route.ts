@@ -1,0 +1,22 @@
+import { NextResponse } from "next/server";
+
+import { warmOllamaModel } from "@/lib/ollama-config";
+
+export const runtime = "nodejs";
+
+export async function POST() {
+  const result = await warmOllamaModel();
+
+  if (!result.ok) {
+    return NextResponse.json(
+      { error: result.error || "Could not warm the local Ollama model." },
+      { status: 502 }
+    );
+  }
+
+  return NextResponse.json({
+    status: "ready",
+    model: result.model,
+    ollamaUrl: result.ollamaUrl,
+  });
+}

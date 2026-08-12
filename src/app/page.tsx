@@ -4,8 +4,8 @@ import type { ChangeEvent } from "react";
 import { useEffect, useState } from "react";
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-const MAX_IMAGE_EDGE = 900;
-const AGGRESSIVE_MAX_IMAGE_EDGE = 760;
+const MAX_IMAGE_EDGE = 640;
+const AGGRESSIVE_MAX_IMAGE_EDGE = 520;
 const OPTIMIZED_UPLOAD_BYTES = 1.5 * 1024 * 1024;
 const ANALYSIS_TIMEOUT_MS = 130_000;
 const SECTION_ANALYSIS_TIMEOUT_MS = 120_000;
@@ -32,7 +32,7 @@ function renameAsJpeg(fileName: string) {
 }
 
 async function optimizeWorksheetImage(file: File): Promise<File> {
-  return optimizeWorksheetImageWithSettings(file, MAX_IMAGE_EDGE, 0.78);
+  return optimizeWorksheetImageWithSettings(file, MAX_IMAGE_EDGE, 0.68);
 }
 
 async function optimizeWorksheetImageAggressive(file: File): Promise<File> {
@@ -234,6 +234,7 @@ export default function Home() {
   const [isChecking, setIsChecking] = useState(false);
   const [inputVersion, setInputVersion] = useState(0);
   const [appVersion, setAppVersion] = useState("checking...");
+  const [modelStatus, setModelStatus] = useState("starting");
 
   useEffect(() => {
     fetch("/api/version")
@@ -243,6 +244,19 @@ export default function Home() {
       })
       .catch(() => {
         setAppVersion("unknown");
+      });
+
+    fetch("/api/warmup", { method: "POST" })
+      .then(async (response) => {
+        if (!response.ok) {
+          setModelStatus("offline");
+          return;
+        }
+
+        setModelStatus("ready");
+      })
+      .catch(() => {
+        setModelStatus("offline");
       });
   }, []);
 
@@ -626,7 +640,7 @@ export default function Home() {
             The analysis is generated locally with Ollama and shown here once it finishes. For best results, use a clear, well-lit photo of one worksheet page.
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            App grading engine: {appVersion}
+            App grading engine: {appVersion} · Ollama: {modelStatus}
           </p>
 
           {analysisReport ? (

@@ -41,4 +41,29 @@ OLLAMA_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=qwen3-vl:2b-instruct
 ```
 
-Create `.env.local` with those values if you need to override the defaults. Analysis usually takes 20–60 seconds on the 2b model; the first run may take longer while Ollama loads the model.
+Create `.env.local` with those values if you need to override the defaults.
+
+Optional speed settings:
+
+```env
+OLLAMA_FAST_MODE=true
+OLLAMA_KEEP_ALIVE=30m
+```
+
+## Speed tips
+
+| Setup | Typical analysis time |
+|---|---|
+| CPU + `qwen3-vl:2b-instruct` | 25–60 seconds |
+| NVIDIA GPU + `qwen3-vl:2b-instruct` | 8–20 seconds |
+| CPU + `qwen3-vl:4b-instruct` | 60–120 seconds |
+
+To get close to **10 seconds**:
+
+1. Use a **GPU** — Ollama will use it automatically when available.
+2. Keep **`qwen3-vl:2b-instruct`** (already the default).
+3. Open the app once and wait for **Ollama: ready** — this pre-loads the model.
+4. Set `OLLAMA_FAST_MODE=true` in `.env.local` for smaller/faster vision requests.
+5. Crop photos close to the worksheet — less image data means faster inference.
+
+The first worksheet after reboot is slower while Ollama loads the model into memory.
