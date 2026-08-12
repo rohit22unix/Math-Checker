@@ -6,6 +6,54 @@ Use this guide to rent a cloud GPU for **~8–20 second** worksheet checks while
 
 ---
 
+## Start / Stop checklist (repeat each session)
+
+Use this every time you check worksheets with RunPod GPU.
+
+### When you START (before checking worksheets)
+
+- [ ] **1. Start pod** — [RunPod Pods](https://www.console.runpod.io/pods) → select pod → **Start** (or deploy a new one if terminated)
+- [ ] **2. Load model on GPU** — open **Web Terminal** on the pod and run:
+  ```bash
+  OLLAMA_HOST=0.0.0.0 ollama serve > ollama.log 2>&1 &
+  sleep 5
+  ollama run qwen3-vl:2b-instruct "Reply with OK."
+  nvidia-smi
+  ```
+  Confirm GPU memory is in use (~2–32 GB) and `ollama ps` shows **100% GPU**.
+- [ ] **3. SSH tunnel (Window 1)** — on your laptop, leave this open:
+  ```powershell
+  ssh -L 11435:127.0.0.1:11434 root@YOUR_POD_IP -p YOUR_SSH_PORT -i C:\Users\rohit\.ssh\id_ed25519
+  ```
+  Get `YOUR_POD_IP` and `YOUR_SSH_PORT` from the pod **Connect** tab.  
+  **Use port 11435 locally** — Windows Ollama keeps 11434 busy.
+- [ ] **4. Test tunnel (Window 2)**:
+  ```powershell
+  curl http://127.0.0.1:11435/api/ps
+  ```
+  Should return JSON with a large `"size_vram"`.
+- [ ] **5. Start Math-Checker (Window 2)**:
+  ```powershell
+  cd C:\Users\rohit\OneDrive\Documents\AI-Tools\math-checker
+  git pull origin master
+  .\scripts\start-with-runpod.ps1
+  ```
+- [ ] **6. Open app** — `http://localhost:3000` → confirm **Ollama: ready · Processor: gpu**
+- [ ] **7. Check worksheets** — expect **~8–25 seconds** per page
+
+### When you STOP (after checking worksheets)
+
+- [ ] **1. Stop Math-Checker** — close the app terminal or `Ctrl+C`
+- [ ] **2. Close SSH tunnel** — type `exit` in Window 1 (or close the window)
+- [ ] **3. Stop RunPod pod** — RunPod dashboard → your pod → **Stop**  
+  **This stops billing.** Leaving a pod running overnight can cost ~$1–5.
+
+### Pod is stopped right now?
+
+Nothing to pay on RunPod until you **Start** the pod again. Your code and `.env.local` on the laptop are unchanged. Use the **START** checklist above next time.
+
+---
+
 ## Part 1 — Create the RunPod GPU pod
 
 ### 1. Sign up and add credits
@@ -95,7 +143,16 @@ git pull origin master
 
 ### 2. Create `.env.local`
 
-Copy `.env.example` to `.env.local` and set your RunPod URL:
+For **SSH tunnel** (recommended on Windows — use local port **11435**):
+
+```env
+OLLAMA_URL=http://127.0.0.1:11435
+OLLAMA_MODEL=qwen3-vl:2b-instruct
+OLLAMA_FAST_MODE=true
+OLLAMA_KEEP_ALIVE=30m
+```
+
+Or, if the RunPod **HTTPS proxy** works for your pod (port 11434 exposed):
 
 ```env
 OLLAMA_URL=https://YOUR_POD_ID-11434.proxy.runpod.net
@@ -104,7 +161,7 @@ OLLAMA_FAST_MODE=true
 OLLAMA_KEEP_ALIVE=30m
 ```
 
-Replace `YOUR_POD_ID` with your actual pod ID from RunPod.
+The `start-with-runpod.ps1` script writes the SSH tunnel `.env.local` for you automatically.
 
 ### 3. Test Ollama from your laptop
 
@@ -119,6 +176,12 @@ curl https://YOUR_POD_ID-11434.proxy.runpod.net/api/tags
 ```
 
 ### 4. Build and start Math-Checker
+
+```powershell
+.\scripts\start-with-runpod.ps1
+```
+
+Or manually:
 
 ```powershell
 npm install
@@ -170,13 +233,14 @@ ollama pull qwen3-vl:2b-instruct
 
 | Problem | What to do |
 |---|---|
-| **Ollama: offline** in app | Pod stopped, wrong URL in `.env.local`, or model not pulled yet |
-| **Processor: cpu** | Redeploy with a CUDA GPU template; restart Ollama on the pod |
-| `curl` fails from laptop | Pod not running; check RunPod dashboard |
-| First worksheet slow (~60s) | Normal — model loading; second worksheet should be faster |
-| HTTPS / certificate error | Use the exact RunPod proxy URL with `https://` |
-| App still uses CPU | Remove local `ollama serve` confusion — with `.env.local` set, app uses only RunPod |
-| High bill | Set a phone reminder to **Stop** the pod after each session |
+| **Ollama: offline** in app | Pod stopped, SSH tunnel closed, or wrong URL in `.env.local` |
+| **Processor: cpu** | On pod run `ollama run qwen3-vl:2b-instruct "OK"` then check `nvidia-smi` |
+| **`bind ... Permission denied`** on SSH | Use port **11435** locally, not 11434 (local Ollama conflict) |
+| SSH asks for **password** | Add SSH public key to RunPod settings + pod `authorized_keys` |
+| Proxy URL returns **404** | Use SSH tunnel instead; port 11434 may not be exposed on pod |
+| `curl` fails from laptop | Pod not running; reconnect SSH tunnel |
+| Only **1 question** in report | `git pull origin master` for quadrant fallback fix |
+| High bill | **Stop** the pod after each session (see checklist above) |
 
 ---
 
@@ -197,8 +261,9 @@ ollama pull qwen3-vl:2b-instruct
 |---|---|
 | Model | `qwen3-vl:2b-instruct` |
 | RunPod port | `11434` |
+| Local SSH tunnel port | `11435` (avoids Windows Ollama on 11434) |
 | Env var on pod | `OLLAMA_HOST=0.0.0.0` |
-| Proxy URL pattern | `https://POD_ID-11434.proxy.runpod.net` |
+| Start script | `.\scripts\start-with-runpod.ps1` |
 | Stop pod when done | **Yes — always** |
 
 Official RunPod docs: [docs.runpod.io/tutorials/pods/run-ollama](https://docs.runpod.io/tutorials/pods/run-ollama)
