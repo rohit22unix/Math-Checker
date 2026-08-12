@@ -132,6 +132,14 @@ Copy `.env.example` to `.env.local` and uncomment the remote GPU lines as a star
 
 If you have **no NVIDIA GPU anywhere**, you can rent one by the hour and still use **free Ollama** (no OpenAI/Google vision API). Math-Checker stays on your laptop; only the vision model runs in the cloud.
 
+**Step-by-step guide:** [docs/RUNPOD-SETUP.md](docs/RUNPOD-SETUP.md)
+
+**Quick test after setup:**
+
+```powershell
+.\scripts\test-ollama.ps1
+```
+
 ### Cost (typical)
 
 | Provider | GPU example | ~Price | Worksheet session (~15 min) |

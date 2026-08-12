@@ -672,7 +672,7 @@ OLLAMA_FAST_MODE=true`}
               </pre>
               <p className="mt-2 text-xs leading-5 text-amber-800">
                 Stop the cloud pod when you finish to keep cost low (~$0.04–0.11 per short session).
-                See README for RunPod setup and SSH tunnel options.
+                Full setup: <code className="rounded bg-amber-100 px-1">docs/RUNPOD-SETUP.md</code>
               </p>
             </div>
           ) : null}

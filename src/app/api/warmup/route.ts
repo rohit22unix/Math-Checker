@@ -9,7 +9,7 @@ export async function POST() {
 
   if (!result.ok) {
     return NextResponse.json(
-      { error: result.error || "Could not warm the local Ollama model." },
+      { error: result.error || "Could not reach the configured Ollama server." },
       { status: 502 }
     );
   }

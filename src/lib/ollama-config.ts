@@ -3,21 +3,27 @@ export const DEFAULT_OLLAMA_MODEL = "qwen3-vl:2b-instruct";
 export const DEFAULT_KEEP_ALIVE = "30m";
 export const ANALYSIS_TIMEOUT_MS = 120_000;
 
+export function normalizeOllamaUrl(url: string) {
+  return url.trim().replace(/\/+$/, "");
+}
+
 export function getOllamaConfig() {
   const ollamaModel = process.env.OLLAMA_MODEL?.trim() || DEFAULT_OLLAMA_MODEL;
   const configuredUrl = process.env.OLLAMA_URL?.trim();
   const keepAlive = process.env.OLLAMA_KEEP_ALIVE?.trim() || DEFAULT_KEEP_ALIVE;
   const fastMode = process.env.OLLAMA_FAST_MODE === "true";
 
-  const candidateUrls = Array.from(
-    new Set(
-      [configuredUrl, DEFAULT_OLLAMA_URL, "http://localhost:11434"].filter(
-        (value): value is string => Boolean(value)
-      )
-    )
-  );
+  const candidateUrls = configuredUrl
+    ? [normalizeOllamaUrl(configuredUrl)]
+    : Array.from(
+        new Set(
+          [DEFAULT_OLLAMA_URL, "http://localhost:11434"].filter(
+            (value): value is string => Boolean(value)
+          )
+        )
+      );
 
-  return { ollamaModel, candidateUrls, keepAlive, fastMode };
+  return { ollamaModel, candidateUrls, keepAlive, fastMode, remoteOllama: Boolean(configuredUrl) };
 }
 
 export function getOllamaOptions(fastMode = false) {
@@ -144,6 +150,6 @@ export async function warmOllamaModel(): Promise<{
     model: ollamaModel,
     ollamaUrl: candidateUrls[0] || DEFAULT_OLLAMA_URL,
     processor: "offline",
-    error: "Could not warm the local Ollama model.",
+    error: "Could not reach the configured Ollama server.",
   };
 }
