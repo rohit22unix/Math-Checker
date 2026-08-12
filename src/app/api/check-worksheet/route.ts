@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 
 import {
+  formatGradedReport,
   gradeProblems,
-  gradeWorksheetFromModelText,
   mergeWorkSteps,
   parseExtractedProblems,
   parseWorkSteps,
-  problemsMissingWorkSteps,
-  formatGradedReport,
 } from "@/lib/worksheet-grading";
+
+export const GRADING_VERSION_MARKER = "Graded by Math-Checker (server-side)";
 
 export const runtime = "nodejs";
 
@@ -117,6 +117,52 @@ function extractAnalysisText(payload: unknown): string {
     "";
 
   return typeof value === "string" ? value.trim() : "";
+}
+
+function isLegacyModelGradingOutput(text: string): boolean {
+  return (
+    /Summary:\s*\d+\s*,\s*\d+/i.test(text) &&
+    !text.includes(GRADING_VERSION_MARKER)
+  );
+}
+
+async function extractWorksheetProblems(
+  ollamaUrl: string,
+  ollamaModel: string,
+  base64Image: string,
+  rawAnalysis: string
+) {
+  let extracted = rawAnalysis ? parseExtractedProblems(rawAnalysis) : [];
+
+  if (!extracted.length && rawAnalysis && isLegacyModelGradingOutput(rawAnalysis)) {
+    return {
+      extracted: [],
+      needsAppUpdate: true,
+    };
+  }
+
+  try {
+    const workStepResponse = await callOllamaChat(
+      ollamaUrl,
+      ollamaModel,
+      base64Image,
+      WORK_STEP_PROMPT
+    );
+
+    if (workStepResponse.ok) {
+      const workStepPayload = await workStepResponse.json();
+      const workStepText = extractAnalysisText(workStepPayload);
+      const workSteps = workStepText ? parseWorkSteps(workStepText) : [];
+
+      if (workSteps.length && extracted.length) {
+        extracted = mergeWorkSteps(extracted, workSteps);
+      }
+    }
+  } catch {
+    // Keep first-pass extraction if the work-step request fails.
+  }
+
+  return { extracted, needsAppUpdate: false };
 }
 
 async function callOllamaChat(
@@ -239,40 +285,49 @@ export async function POST(request: Request) {
     }
 
     const payload = await ollamaResponse.json();
-    const rawAnalysis = extractAnalysisText(payload);
-    let extracted = rawAnalysis ? parseExtractedProblems(rawAnalysis) : [];
+    let rawAnalysis = extractAnalysisText(payload);
+    let { extracted, needsAppUpdate } = selectedOllamaUrl
+      ? await extractWorksheetProblems(
+          selectedOllamaUrl,
+          ollamaModel,
+          base64Image,
+          rawAnalysis
+        )
+      : { extracted: [], needsAppUpdate: false };
 
-    if (extracted.length && problemsMissingWorkSteps(extracted).length > 0) {
-      if (selectedOllamaUrl) {
-        try {
-          const workStepResponse = await callOllamaChat(
-            selectedOllamaUrl,
-            ollamaModel,
-            base64Image,
-            WORK_STEP_PROMPT
-          );
+    if (!extracted.length && selectedOllamaUrl && !needsAppUpdate) {
+      const retryResponse = await callOllamaChat(
+        selectedOllamaUrl,
+        ollamaModel,
+        base64Image,
+        `${EXTRACTION_PROMPT}\n\nImportant: respond with JSON only. Do not grade problems.`
+      );
 
-          if (workStepResponse.ok) {
-            const workStepPayload = await workStepResponse.json();
-            const workStepText = extractAnalysisText(workStepPayload);
-            const workSteps = workStepText ? parseWorkSteps(workStepText) : [];
-
-            if (workSteps.length) {
-              extracted = mergeWorkSteps(extracted, workSteps);
-            }
-          }
-        } catch {
-          // Keep first-pass extraction if the work-step request fails.
-        }
+      if (retryResponse.ok) {
+        const retryPayload = await retryResponse.json();
+        rawAnalysis = extractAnalysisText(retryPayload);
+        ({ extracted, needsAppUpdate } = await extractWorksheetProblems(
+          selectedOllamaUrl,
+          ollamaModel,
+          base64Image,
+          rawAnalysis
+        ));
       }
     }
 
-    let analysisText =
-      extracted.length > 0
-        ? formatGradedReport(gradeProblems(extracted))
-        : rawAnalysis
-          ? gradeWorksheetFromModelText(rawAnalysis)
-          : null;
+    if (needsAppUpdate) {
+      return NextResponse.json(
+        {
+          analysis:
+            "This result came from an older app build on your machine. Run: git pull origin cursor/fix-vision-worksheet-analysis && npm install && npm run build && npm run start -- --hostname 0.0.0.0",
+          gradingVersion: "legacy",
+        },
+        { status: 200 }
+      );
+    }
+
+    const analysisText =
+      extracted.length > 0 ? formatGradedReport(gradeProblems(extracted)) : null;
 
     if (!analysisText) {
       return NextResponse.json(
@@ -287,6 +342,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       analysis: analysisText.trim(),
       durationMs: Date.now() - startedAt,
+      gradingVersion: "server-side-v2",
     });
   } catch (error) {
     console.error("Worksheet check failed", error);

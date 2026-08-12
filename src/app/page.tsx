@@ -11,11 +11,13 @@ const ANALYSIS_TIMEOUT_MS = 190_000;
 const SECTION_ANALYSIS_TIMEOUT_MS = 120_000;
 const UNUSABLE_RESULT_MARKER =
   "the worksheet image was received, but the local model did not return a usable result";
+const SERVER_GRADING_MARKER = "Graded by Math-Checker (server-side)";
 
 type WorksheetApiResult = {
   analysis?: string;
   error?: string;
   durationMs?: number;
+  gradingVersion?: string;
 };
 
 function renameAsJpeg(fileName: string) {
@@ -231,6 +233,18 @@ export default function Home() {
   const [errorMessage, setErrorMessage] = useState("");
   const [isChecking, setIsChecking] = useState(false);
   const [inputVersion, setInputVersion] = useState(0);
+  const [appVersion, setAppVersion] = useState("checking...");
+
+  useEffect(() => {
+    fetch("/api/version")
+      .then((response) => response.json())
+      .then((payload: { grading?: string }) => {
+        setAppVersion(payload.grading || "unknown");
+      })
+      .catch(() => {
+        setAppVersion("unknown");
+      });
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -446,7 +460,18 @@ export default function Home() {
       }
 
       setAnalysisDuration(payload.durationMs ?? Date.now() - startedAt);
-      setAnalysisReport(payload.analysis || "No worksheet analysis was returned.");
+      const report = payload.analysis || "No worksheet analysis was returned.";
+      setAnalysisReport(report);
+
+      if (
+        payload.gradingVersion !== "server-side-v2" &&
+        !report.includes(SERVER_GRADING_MARKER)
+      ) {
+        setErrorMessage(
+          "This report looks like an older app build. On your laptop run: git pull origin cursor/fix-vision-worksheet-analysis && npm install && npm run build && npm run start -- --hostname 0.0.0.0"
+        );
+      }
+
       setStatusMessage("Worksheet analysis complete.");
     } catch (error) {
       if (
@@ -599,6 +624,9 @@ export default function Home() {
           <h2 className="text-xl font-semibold">Worksheet Report</h2>
           <p className="mt-2 text-sm leading-6 text-slate-600">
             The analysis is generated locally with Ollama and shown here once it finishes. For best results, use a clear, well-lit photo of one worksheet page.
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            App grading engine: {appVersion}
           </p>
 
           {analysisReport ? (
