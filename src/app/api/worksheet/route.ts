@@ -2,8 +2,19 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434";
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen3-vl:4b";
+const DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434";
+const DEFAULT_OLLAMA_MODEL = "qwen3-vl:4b-instruct";
+const ANALYSIS_TIMEOUT_MS = 180_000;
+
+function getOllamaConfig() {
+  const ollamaUrl =
+    process.env.OLLAMA_URL?.trim() ||
+    process.env.OLLAMA_BASE_URL?.trim() ||
+    DEFAULT_OLLAMA_URL;
+  const ollamaModel = process.env.OLLAMA_MODEL?.trim() || DEFAULT_OLLAMA_MODEL;
+
+  return { ollamaUrl, ollamaModel };
+}
 
 export async function POST(request: Request) {
   try {
@@ -24,21 +35,33 @@ export async function POST(request: Request) {
       );
     }
 
+    const { ollamaUrl, ollamaModel } = getOllamaConfig();
     const arrayBuffer = await file.arrayBuffer();
     const base64Image = Buffer.from(arrayBuffer).toString("base64");
 
-    const ollamaResponse = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+    const ollamaResponse = await fetch(`${ollamaUrl}/api/chat`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: OLLAMA_MODEL,
-        prompt:
-          "You are analyzing a student's math worksheet image. Describe what you can see, summarize the worksheet, and briefly explain whether the answers appear correct or incomplete. Keep the response concise and practical.",
+        model: ollamaModel,
         stream: false,
-        images: [base64Image],
+        options: {
+          temperature: 0.0,
+          num_ctx: 8192,
+          num_predict: 640,
+        },
+        messages: [
+          {
+            role: "user",
+            content:
+              "You are analyzing a student's math worksheet image. Describe what you can see, summarize the worksheet, and briefly explain whether the answers appear correct or incomplete. Keep the response concise and practical.",
+            images: [base64Image],
+          },
+        ],
       }),
+      signal: AbortSignal.timeout(ANALYSIS_TIMEOUT_MS),
     });
 
     if (!ollamaResponse.ok) {
@@ -52,11 +75,16 @@ export async function POST(request: Request) {
     }
 
     const payload = await ollamaResponse.json();
+    const message = payload?.message as Record<string, unknown> | undefined;
+    const analysis =
+      (typeof message?.content === "string" ? message.content : "") ||
+      (typeof payload?.response === "string" ? payload.response : "") ||
+      "No analysis returned by Ollama.";
 
     return NextResponse.json({
       message: "Worksheet analysis completed.",
-      analysis: payload.response || "No analysis returned by Ollama.",
-      model: OLLAMA_MODEL,
+      analysis,
+      model: ollamaModel,
       fileName: file.name,
       fileType: file.type,
       fileSize: file.size,

@@ -4,13 +4,11 @@ import type { ChangeEvent } from "react";
 import { useEffect, useState } from "react";
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-const MAX_IMAGE_EDGE = 1000;
+const MAX_IMAGE_EDGE = 1400;
 const AGGRESSIVE_MAX_IMAGE_EDGE = 760;
 const OPTIMIZED_UPLOAD_BYTES = 1.5 * 1024 * 1024;
-const ANALYSIS_TIMEOUT_MS = 25_000;
-const SECTION_ANALYSIS_TIMEOUT_MS = 22_000;
-const SECTION_IMAGE_MAX_EDGE = 560;
-const SECTION_FIRST_MIN_EDGE = 720;
+const ANALYSIS_TIMEOUT_MS = 190_000;
+const SECTION_ANALYSIS_TIMEOUT_MS = 120_000;
 const UNUSABLE_RESULT_MARKER =
   "the worksheet image was received, but the local model did not return a usable result";
 
@@ -32,7 +30,7 @@ function renameAsJpeg(fileName: string) {
 }
 
 async function optimizeWorksheetImage(file: File): Promise<File> {
-  return optimizeWorksheetImageWithSettings(file, MAX_IMAGE_EDGE, 0.74);
+  return optimizeWorksheetImageWithSettings(file, MAX_IMAGE_EDGE, 0.82);
 }
 
 async function optimizeWorksheetImageAggressive(file: File): Promise<File> {
@@ -200,7 +198,7 @@ async function createWorksheetSections(file: File): Promise<File[]> {
       );
 
       const blob = await new Promise<Blob | null>((resolve) => {
-        canvas.toBlob(resolve, "image/jpeg", 0.68);
+        canvas.toBlob(resolve, "image/jpeg", 0.75);
       });
 
       if (!blob) {
@@ -216,24 +214,6 @@ async function createWorksheetSections(file: File): Promise<File[]> {
     }
 
     return files.length ? files : [file];
-  } finally {
-    URL.revokeObjectURL(previewObjectUrl);
-  }
-}
-
-async function getImageLongestEdge(file: File): Promise<number> {
-  const previewObjectUrl = URL.createObjectURL(file);
-
-  try {
-    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const element = new Image();
-
-      element.onload = () => resolve(element);
-      element.onerror = () => reject(new Error("The selected image could not be read."));
-      element.src = previewObjectUrl;
-    });
-
-    return Math.max(image.width, image.height);
   } finally {
     URL.revokeObjectURL(previewObjectUrl);
   }
@@ -362,7 +342,9 @@ export default function Home() {
     setErrorMessage("");
     setAnalysisReport("");
     setAnalysisDuration(null);
-    setStatusMessage("Checking Worksheet… This usually finishes within about a minute.");
+    setStatusMessage(
+      "Checking Worksheet… Local AI analysis usually takes 1–3 minutes on the first run."
+    );
 
     const startedAt = Date.now();
 
@@ -370,77 +352,6 @@ export default function Home() {
       let requestFile = worksheet;
       let didRetryForContext = false;
       let payload: WorksheetApiResult | null = null;
-      const longestEdge = await getImageLongestEdge(worksheet);
-      const shouldUseSectionFirst = longestEdge >= SECTION_FIRST_MIN_EDGE;
-
-      if (shouldUseSectionFirst) {
-        setStatusMessage("Analyzing worksheet sections for faster local AI results...");
-
-        const sectionFiles = await createWorksheetSections(worksheet);
-        const sectionReports: string[] = [];
-        const sectionOutcomes: string[] = [];
-
-        for (let index = 0; index < sectionFiles.length; index += 1) {
-          const fastSectionFile = await optimizeWorksheetImageWithSettings(
-            sectionFiles[index],
-            SECTION_IMAGE_MAX_EDGE,
-            0.56
-          );
-
-          const sectionResult = await requestWorksheetAnalysis(
-            fastSectionFile,
-            SECTION_ANALYSIS_TIMEOUT_MS
-          );
-
-          if (sectionResult.timedOut) {
-            sectionOutcomes.push(`Section ${index + 1}: timed out`);
-            continue;
-          }
-
-          if (!sectionResult.ok) {
-            const sectionError = String(sectionResult.data.error || "request failed");
-            sectionOutcomes.push(`Section ${index + 1}: ${sectionError}`);
-            continue;
-          }
-
-          const sectionText = String(sectionResult.data.analysis || "").trim();
-
-          if (!sectionText || isUnusableAnalysisResult(sectionText)) {
-            sectionOutcomes.push(`Section ${index + 1}: no usable text extracted`);
-            continue;
-          }
-
-          sectionOutcomes.push(`Section ${index + 1}: extracted`);
-          sectionReports.push(`Section ${index + 1}: ${sectionText}`);
-        }
-
-        if (sectionReports.length > 0) {
-          payload = {
-            analysis:
-              "Combined section-by-section analysis:\n\n" + sectionReports.join("\n\n"),
-            durationMs: Date.now() - startedAt,
-          };
-        } else {
-          payload = {
-            analysis:
-              "Section-by-section analysis could not extract readable worksheet text.\n\n" +
-              sectionOutcomes.join("\n") +
-              "\n\nTry taking two separate photos: one for the top half and one for the bottom half.",
-            durationMs: Date.now() - startedAt,
-          };
-        }
-      }
-
-      if (
-        payload?.analysis &&
-        (payload.analysis.startsWith("Combined section-by-section analysis:") ||
-          payload.analysis.startsWith("Section-by-section analysis could not extract readable worksheet text."))
-      ) {
-        setAnalysisDuration(payload.durationMs ?? Date.now() - startedAt);
-        setAnalysisReport(payload.analysis);
-        setStatusMessage("Worksheet analysis complete.");
-        return;
-      }
 
       while (true) {
         const result = await requestWorksheetAnalysis(requestFile, ANALYSIS_TIMEOUT_MS);
@@ -484,8 +395,11 @@ export default function Home() {
       }
 
       const analysisText = String(payload?.analysis || "").trim();
+      const shouldTrySections =
+        (analysisText && isUnusableAnalysisResult(analysisText)) ||
+        analysisText.startsWith("The full-page worksheet request timed out");
 
-      if (analysisText && isUnusableAnalysisResult(analysisText)) {
+      if (shouldTrySections) {
         setStatusMessage("Trying section-by-section worksheet analysis...");
 
         const sectionFiles = await createWorksheetSections(worksheet);
@@ -576,7 +490,8 @@ export default function Home() {
             <ul className="mt-2 list-disc space-y-1 pl-5">
               <li>Use good lighting and keep the page flat.</li>
                 <li>Avoid strong shadows from your phone or your hand.</li>
-                <li>Crop close to the worked problems so the fractions stay readable.</li>
+              <li>Crop close to the worked problems so the fractions stay readable.</li>
+              <li>Write final answers clearly; a messy 4 can be misread as 9.</li>
               <li>Photos are processed locally and are not permanently stored.</li>
             </ul>
           </div>
