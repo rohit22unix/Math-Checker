@@ -228,6 +228,18 @@ export function evaluateExpression(expression: string): string | null {
   }
 }
 
+export function formatWorksheetExpressionForDisplay(expression: string): string {
+  if (!expression || expression === "Unclear") {
+    return expression;
+  }
+
+  return expression
+    .replace(/\s+\/\s+/g, " ÷ ")
+    .replace(/\s*\*\s*/g, " × ")
+    .replace(/\s+x\s+/gi, " × ")
+    .trim();
+}
+
 function inferStudentAnswer(problem: ExtractedProblem): {
   answer: string;
   writtenAnswer: string;
@@ -284,8 +296,9 @@ export function gradeProblems(problems: ExtractedProblem[]): GradedProblem[] {
     const expression = normalizeExpression(problem.printed_expression);
     const inferred = inferStudentAnswer(problem);
     const correctAnswer = expression ? evaluateExpression(expression) : null;
-    const displayExpression =
-      expression || latexToPlainMath(problem.printed_expression) || "Unclear";
+    const displayExpression = formatWorksheetExpressionForDisplay(
+      expression || latexToPlainMath(problem.printed_expression) || "Unclear"
+    );
 
     if (!correctAnswer) {
       return {
