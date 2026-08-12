@@ -40,17 +40,19 @@ catch {
     Write-Host "Open another PowerShell window and run the SSH tunnel first:" -ForegroundColor Yellow
     Write-Host "  ssh -L ${TunnelPort}:127.0.0.1:${RemotePort} root@194.68.245.167 -p 22057 -i C:\Users\rohit\.ssh\id_ed25519"
     Write-Host ""
-    Write-Host "Tip: local Ollama keeps port 11434 busy on Windows — this script uses 11435 instead." -ForegroundColor Yellow
+    Write-Host "Tip: local Ollama keeps port 11434 busy on Windows. This script uses 11435 instead." -ForegroundColor Yellow
     exit 1
 }
 
 Write-Host "Updating .env.local for SSH tunnel on port $TunnelPort ..." -ForegroundColor Yellow
-@"
-OLLAMA_URL=$OllamaUrl
-OLLAMA_MODEL=qwen3-vl:2b-instruct
-OLLAMA_FAST_MODE=true
-OLLAMA_KEEP_ALIVE=30m
-"@ | Set-Content -Path ".env.local" -Encoding utf8
+
+$envLines = @(
+    "OLLAMA_URL=$OllamaUrl",
+    "OLLAMA_MODEL=qwen3-vl:2b-instruct",
+    "OLLAMA_FAST_MODE=true",
+    "OLLAMA_KEEP_ALIVE=30m"
+)
+Set-Content -Path ".env.local" -Value $envLines -Encoding utf8
 
 Write-Host "Building Math-Checker ..." -ForegroundColor Cyan
 npm run build
